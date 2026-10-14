@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn Recruiter Finder",
+  "name": "LinkedIn Job Toolkit",
   "version": "3.0",
-  "description": "Click from any LinkedIn job page — auto-finds all recruiters from the company People tab.",
+  "description": "Finds recruiters, captures job descriptions, and drafts application answers while you browse LinkedIn job postings.",
   "permissions": ["activeTab", "scripting", "tabs", "storage", "unlimitedStorage", "sidePanel", "contextMenus"],
   "host_permissions": ["https://www.linkedin.com/*", "<all_urls>"],
 
@@ -19,7 +19,7 @@
         "default": "Alt+R",
         "mac":     "Command+Shift+R"
       },
-      "description": "Open LinkedIn Recruiter Finder"
+      "description": "Open LinkedIn Job Toolkit"
     }
   },
 

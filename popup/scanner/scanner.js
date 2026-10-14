@@ -18,10 +18,14 @@ async function runQueuedScan(slug) {
   isScanning = true;
   renderQueue();
 
-  resultsDiv.innerHTML = '';
-  resultsCompanyBanner.style.display = 'none';
-  const _rsh = document.getElementById('resultsSearchWrap'); if (_rsh) _rsh.style.display = 'none';
-  if (copyBtn) copyBtn.style.display = 'none';
+  // Deliberately NOT clearing resultsDiv/resultsCompanyBanner here. If this is
+  // a re-scan of the company currently on screen, the old results stay
+  // visible (with the "Scanning..." status overlaid) until the new scan
+  // actually completes and renderResults() does its own full replace below -
+  // instead of the panel going blank the instant a re-scan starts. A scan of
+  // a DIFFERENT company already clears resultsDiv itself when the user
+  // navigates there (see currentSlug change elsewhere), so this is safe for
+  // both the re-scan and fresh-company-navigation cases.
   errorDiv.style.display = 'none';
   errorDiv.style.color = '#c0392b';
   progressBar.style.display = 'block';
@@ -31,22 +35,41 @@ async function runQueuedScan(slug) {
   statusBox.textContent = `Scanning ${slug.replace(/-/g, ' ')}...`;
   scanBtn.disabled = false;
   scanBtn.textContent = '➕ Add to Queue';
+  if (stopScanBtn) { stopScanBtn.style.display = ''; stopScanBtn.disabled = false; stopScanBtn.textContent = '⏹ Stop'; }
 
   await chrome.storage.session.set({ manualScanDone: false, manualScanError: false, status: '' });
 
   return new Promise(resolve => {
     chrome.runtime.sendMessage({ action: 'start', companySlug: slug }, async response => {
+      if (stopScanBtn) stopScanBtn.style.display = 'none';
+
       if (chrome.runtime.lastError || !response?.success) {
-        statusBox.textContent = `❌ Error scanning ${slug.replace(/-/g, ' ')}.`;
-        errorDiv.textContent = '❌ Something went wrong. Refresh the job page and try again.';
-        errorDiv.style.display = 'block';
+        if (response?.stopped) {
+          // User-initiated stop: discard partial results, revert to whatever
+          // was cached for this slug before the scan started (or the empty
+          // "no results yet" state if nothing was cached).
+          const cached = await getCached(slug);
+          if (cached) {
+            statusBox.textContent = `Stopped. Showing previous results (${cached.recruiters.length} recruiters).`;
+            renderResults(cached.recruiters, cached.logoUrl);
+          } else {
+            statusBox.textContent = `Scan stopped.`;
+            resultsDiv.innerHTML = '';
+            resultsCompanyBanner.style.display = 'none';
+          }
+          progressBar.style.display = 'none';
+        } else {
+          statusBox.textContent = `❌ Error scanning ${slug.replace(/-/g, ' ')}.`;
+          errorDiv.textContent = '❌ Something went wrong. Refresh the job page and try again.';
+          errorDiv.style.display = 'block';
+        }
       } else {
         progressFill.style.width = '100%';
         statusBox.textContent = `✅ Done! Found ${response.data.length} recruiters for ${slug.replace(/-/g, ' ')}.`;
         renderResults(response.data, response.logoUrl);
         if (response.data.length > 0) {
           await saveToCache(slug, response.data, response.logoUrl);
-          // Re-evaluate observer notif — those recruiters are now cached so banner should clear
+          // Re-evaluate observer notif, those recruiters are now cached so banner should clear
           if (_obsPending.slug === slug) showObserverNotif(slug, _obsPending.recruiters);
           // Clear profile notif if it was for this company
           if (_profileRecruiter?.companySlug === slug) hideProfileNotif();
@@ -57,6 +80,13 @@ async function runQueuedScan(slug) {
     pollStatus(false);
   });
 }
+
+stopScanBtn?.addEventListener('click', () => {
+  if (!currentScanSlug) return;
+  stopScanBtn.disabled = true;
+  stopScanBtn.textContent = 'Stopping...';
+  chrome.runtime.sendMessage({ action: 'stop', companySlug: currentScanSlug });
+});
 
 async function processQueue() {
   while (scanQueue.length > 0) {
@@ -183,9 +213,14 @@ scanBtn.addEventListener('click', async () => {
       errorDiv.textContent = `💡 Showing cached results. Click "Re-scan" to fetch fresh data.`;
       return;
     }
-  } else {
-    await deleteFromCache(slug);
   }
+  // Re-scan: deliberately NOT deleting the cache entry here. The existing
+  // cached results (and resultsDiv) stay as-is while the scan runs in the
+  // background; saveToCache() on success fully overwrites this slug's entry
+  // with the fresh results, which is what actually drops anyone no longer
+  // found (e.g. someone who left the company). Deleting upfront only caused
+  // the panel to blank out the instant Re-scan was clicked, before any new
+  // data existed yet.
 
   // Start scan immediately
   await runQueuedScan(slug);

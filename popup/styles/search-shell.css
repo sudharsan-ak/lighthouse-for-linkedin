@@ -173,6 +173,21 @@ body {
 #scanBtn:hover { background: #004182; }
 #scanBtn:disabled { background: #aaa; cursor: not-allowed; }
 
+#stopScanBtn {
+  background: #fff;
+  color: #c0392b;
+  border: 1px solid #c0392b;
+  padding: 3px 6px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#stopScanBtn:hover { background: #fdecea; }
+#stopScanBtn:disabled { background: #f3f3f3; color: #aaa; border-color: #ddd; cursor: not-allowed; }
+
 .results-search-wrap { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 #resultsSearch {
   flex: 1;

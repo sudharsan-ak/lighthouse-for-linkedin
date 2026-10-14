@@ -205,7 +205,9 @@ async function renderHistory(filter = '') {
   });
 
   function visibleRows(slug) {
-    return [...historyList.querySelectorAll(`#hist-${slug} .history-recruiter-row`)]
+    const container = document.getElementById(`hist-${slug}`);
+    if (!container) return [];
+    return [...container.querySelectorAll('.history-recruiter-row')]
       .filter(row => row.style.display !== 'none');
   }
 
@@ -270,7 +272,8 @@ async function renderHistory(filter = '') {
     cb.addEventListener('change', e => {
       e.stopPropagation();
       const slug = cb.dataset.slug;
-      historyList.querySelectorAll(`#hist-${slug} .history-recruiter-row`).forEach(row => {
+      const container = document.getElementById(`hist-${slug}`);
+      (container ? [...container.querySelectorAll('.history-recruiter-row')] : []).forEach(row => {
         if (row.style.display !== 'none') {
           const rowCb = row.querySelector('.h-check');
           if (rowCb) rowCb.checked = cb.checked;
@@ -313,7 +316,8 @@ async function renderHistory(filter = '') {
     btn.addEventListener('click', e => {
       e.stopPropagation();
       const slug = btn.dataset.slug;
-      const urls = [...historyList.querySelectorAll(`#hist-${slug} .h-check:checked`)].map(cb => cb.dataset.url);
+      const container = document.getElementById(`hist-${slug}`);
+      const urls = (container ? [...container.querySelectorAll('.h-check:checked')] : []).map(cb => cb.dataset.url);
       navigator.clipboard.writeText(urls.join('\n')).then(() => {
         const orig = btn.textContent;
         btn.textContent = '✅ Copied!';
@@ -348,7 +352,8 @@ async function renderHistory(filter = '') {
       e.stopPropagation();
       document.querySelectorAll('.h-dot-menu').forEach(m => { m.style.display = 'none'; });
       const slug = btn.dataset.slug;
-      const checked = [...historyList.querySelectorAll(`#hist-${slug} .h-check:checked`)];
+      const container = document.getElementById(`hist-${slug}`);
+      const checked = container ? [...container.querySelectorAll('.h-check:checked')] : [];
       const targetRows = checked.length
         ? checked.map(cb => cb.closest('.history-recruiter-row')).filter(Boolean)
         : visibleRows(slug);
@@ -369,7 +374,8 @@ async function renderHistory(filter = '') {
       e.stopPropagation();
       document.querySelectorAll('.h-dot-menu').forEach(m => { m.style.display = 'none'; });
       const slug = btn.dataset.slug;
-      const checked = [...historyList.querySelectorAll(`#hist-${slug} .h-check:checked`)];
+      const container = document.getElementById(`hist-${slug}`);
+      const checked = container ? [...container.querySelectorAll('.h-check:checked')] : [];
       const targetRows = checked.length
         ? checked.map(cb => cb.closest('.history-recruiter-row')).filter(Boolean)
         : visibleRows(slug);
@@ -397,7 +403,8 @@ async function renderHistory(filter = '') {
       e.stopPropagation();
       document.querySelectorAll('.h-dot-menu').forEach(m => { m.style.display = 'none'; });
       const slug = btn.dataset.slug;
-      const checked = [...historyList.querySelectorAll(`#hist-${slug} .h-check:checked`)];
+      const container = document.getElementById(`hist-${slug}`);
+      const checked = container ? [...container.querySelectorAll('.h-check:checked')] : [];
       if (!checked.length) {
         btn.textContent = 'Select recruiters first';
         btn.style.color = '#c0392b';
@@ -424,7 +431,8 @@ async function renderHistory(filter = '') {
     btn.addEventListener('click', e => {
       e.stopPropagation();
       const slug = btn.dataset.slug;
-      historyList.querySelectorAll(`#hist-${slug} .h-check:checked`).forEach(cb => { cb.checked = false; });
+      const container = document.getElementById(`hist-${slug}`);
+      (container ? [...container.querySelectorAll('.h-check:checked')] : []).forEach(cb => { cb.checked = false; });
       const selectAll = historyList.querySelector(`.h-select-all[data-slug="${slug}"]`);
       if (selectAll) selectAll.checked = false;
       updateHistSelectionBar();
@@ -497,7 +505,8 @@ async function renderHistory(filter = '') {
     btn.addEventListener('click', e => {
       e.stopPropagation();
       const slug = btn.dataset.slug;
-      const emails = [...historyList.querySelectorAll(`#hist-${slug} .h-check:checked`)]
+      const container = document.getElementById(`hist-${slug}`);
+      const emails = (container ? [...container.querySelectorAll('.h-check:checked')] : [])
         .map(cb => cb.closest('.history-recruiter-row')?.querySelector('.h-copy-email')?.dataset.email || '')
         .filter(Boolean);
       if (!emails.length) return;
@@ -515,7 +524,8 @@ async function renderHistory(filter = '') {
       e.stopPropagation();
       const slug = btn.dataset.slug;
       const isActive = btn.classList.toggle('active');
-      historyList.querySelectorAll(`#hist-${slug} .history-recruiter-row`).forEach(row => {
+      const container = document.getElementById(`hist-${slug}`);
+      (container ? [...container.querySelectorAll('.history-recruiter-row')] : []).forEach(row => {
         const hasEmail = !!row.querySelector('.h-copy-email');
         if (!hasEmail) {
           row.style.display = isActive ? 'none' : '';
@@ -541,9 +551,15 @@ async function renderHistory(filter = '') {
   }
 
   function clearListFilter(slug) {
-    const input = historyList.querySelector(`#hist-${slug} .h-list-filter-input`);
-    const clearBtn = historyList.querySelector(`#hist-${slug} .h-list-filter-clear`);
-    const list = historyList.querySelector(`#hist-${slug} .history-recruiter-list`);
+    // Scope via getElementById first, not a template-literal CSS selector:
+    // a slug containing a literal dot (e.g. "cedar-inc.") breaks when
+    // interpolated into an ID selector like `#hist-${slug}`, since CSS
+    // reads an unescaped "." as a class-name separator. getElementById
+    // takes a plain string match, not a CSS selector, so it's dot-safe.
+    const container = document.getElementById(`hist-${slug}`);
+    const input = container?.querySelector('.h-list-filter-input');
+    const clearBtn = container?.querySelector('.h-list-filter-clear');
+    const list = container?.querySelector('.history-recruiter-list');
     if (!input) return;
     input.value = '';
     if (clearBtn) clearBtn.style.display = 'none';
@@ -555,8 +571,9 @@ async function renderHistory(filter = '') {
 
   document.querySelectorAll('.h-list-filter-input').forEach(input => {
     const slug = input.dataset.slug;
-    const list = historyList.querySelector(`#hist-${slug} .history-recruiter-list`);
-    const clearBtn = historyList.querySelector(`#hist-${slug} .h-list-filter-clear`);
+    const container = document.getElementById(`hist-${slug}`);
+    const list = container?.querySelector('.history-recruiter-list');
+    const clearBtn = container?.querySelector('.h-list-filter-clear');
 
     input.addEventListener('input', () => {
       const q = input.value.trim().toLowerCase();
@@ -731,8 +748,10 @@ async function renderHistory(filter = '') {
     });
   });
 
+  console.log('[rename-debug] attaching listeners to', document.querySelectorAll('.rename-company-btn').length, 'rename buttons');
   document.querySelectorAll('.rename-company-btn').forEach(btn => {
     btn.addEventListener('click', e => {
+      console.log('[rename-debug] rename button clicked for slug:', btn.dataset.slug);
       e.stopPropagation();
       const slug    = btn.dataset.slug;
       const nameEl  = document.getElementById(`hn-${slug}`);

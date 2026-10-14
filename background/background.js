@@ -2,6 +2,7 @@ import { searchLinkedInCompanies } from './company-search.js';
 import { runScraper } from './scan-runner.js';
 import { fetchLogoForSlug } from './logo-fetch.js';
 import { autoScrollAndScrape, autoScrollAndScrapeWithHiringFrame } from './people-scrapers.js';
+import { resolveCompanyId, searchByCompanyId } from './company-id-resolver.js';
 
 // background.js � Service worker that orchestrates everything
 
@@ -84,9 +85,18 @@ async function saveToStoredCache(slug, recruiters, logoUrl) {
 
 // -- Auto-scan queue (runs even with panel closed) -----------------------------
 
-const activeScans = new Set();  // slugs currently being scanned (manual or auto)
+const activeScans = new Map();  // slug -> { controller: AbortController } for scans currently running (manual or auto)
 const autoQueue   = [];         // slugs waiting for auto-scan
 let   autoWorking = false;
+let   activeLogoFetch = null;   // { controller, tabId } for the single in-flight Refresh Logos fetch, or null
+
+// Used throughout runScraper/scan helpers to bail out early at the next
+// await boundary once a scan has been stopped. Throwing a distinct error type
+// (rather than returning a sentinel) lets every caller's existing try/catch
+// handle it uniformly without extra per-call-site checks.
+class ScanStoppedError extends Error {
+  constructor() { super('Scan stopped by user'); this.name = 'ScanStoppedError'; }
+}
 
 async function processAutoQueue() {
   if (autoWorking) return;
@@ -94,7 +104,8 @@ async function processAutoQueue() {
   while (autoQueue.length > 0) {
     const slug = autoQueue.shift();
     if (activeScans.has(slug)) continue; // already being scanned manually
-    activeScans.add(slug);
+    const controller = new AbortController();
+    activeScans.set(slug, { controller });
     chrome.storage.session.set({ autoScanSlug: slug, autoScanQueue: [...autoQueue] }).catch(() => {});
     try {
       const { recruiters, logoUrl } = await runScraper(slug, {
@@ -106,6 +117,9 @@ async function processAutoQueue() {
         scrapeTabWithHiringFrame,
         isRecruiter,
         SEARCH_QUERY,
+        resolveCompanyId,
+        searchByCompanyId,
+        signal: controller.signal,
       });
       if (recruiters.length > 0) await saveToStoredCache(slug, recruiters, logoUrl);
       chrome.runtime.sendMessage({ action: 'scanComplete', companySlug: slug, count: recruiters.length }).catch(() => {});
@@ -188,7 +202,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   if (request.action === 'start') {
     const slug = request.companySlug;
-    activeScans.add(slug);
+    const controller = new AbortController();
+    const scanEntry = { controller, tabId: null };
+    activeScans.set(slug, scanEntry);
     // Track in session so popup can recover if the panel is closed mid-scan
     chrome.storage.session.set({ manualScanSlug: slug, manualScanDone: false, manualScanError: false }).catch(() => {});
     runScraper(slug, {
@@ -200,6 +216,10 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       scrapeTabWithHiringFrame,
       isRecruiter,
       SEARCH_QUERY,
+      resolveCompanyId,
+      searchByCompanyId,
+      signal: controller.signal,
+      onTabOpened: tabId => { scanEntry.tabId = tabId; },
     })
       .then(async ({ recruiters, logoUrl }) => {
         activeScans.delete(slug);
@@ -210,16 +230,58 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       })
       .catch(err => {
         activeScans.delete(slug);
-        chrome.storage.session.set({ manualScanDone: true, manualScanError: true }).catch(() => {});
-        sendResponse({ success: false, error: err.message });
+        const stopped = err?.name === 'ScanStoppedError';
+        // Deliberately not saving anything to cache on a user-initiated stop -
+        // partial results are discarded, the panel reverts to whatever was
+        // cached before this scan started (see scanner.js).
+        chrome.storage.session.set({ manualScanDone: true, manualScanError: !stopped }).catch(() => {});
+        sendResponse({ success: false, error: err.message, stopped });
       });
     return true;
   }
 
+  if (request.action === 'stop') {
+    const slug = request.companySlug;
+    const entry = activeScans.get(slug);
+    if (!entry) {
+      sendResponse({ success: false, error: 'No active scan for this company' });
+      return true;
+    }
+    entry.controller.abort();
+    // Close the tab immediately rather than waiting for the aborted promise
+    // chain to unwind - the scan may be mid-await on a page load that won't
+    // check the abort signal again until that await resolves.
+    if (entry.tabId != null) chrome.tabs.remove(entry.tabId).catch(() => {});
+    sendResponse({ success: true });
+    return true;
+  }
+
   if (request.action === 'fetchLogo') {
-    fetchLogoForSlug(request.companySlug, { createTab, waitForTabLoad, sleep })
-      .then(logoUrl => sendResponse({ logoUrl }))
-      .catch(() => sendResponse({ logoUrl: null }));
+    const controller = new AbortController();
+    activeLogoFetch = { controller, tabId: null };
+    fetchLogoForSlug(request.companySlug, {
+      createTab,
+      waitForTabLoad,
+      sleep,
+      signal: controller.signal,
+      onTabOpened: tabId => { if (activeLogoFetch) activeLogoFetch.tabId = tabId; },
+    })
+      .then(logoUrl => { activeLogoFetch = null; sendResponse({ logoUrl }); })
+      .catch(() => { activeLogoFetch = null; sendResponse({ logoUrl: null }); });
+    return true;
+  }
+
+  if (request.action === 'stopLogoFetch') {
+    if (activeLogoFetch) {
+      activeLogoFetch.controller.abort();
+      // Close the tab immediately rather than waiting for the aborted promise
+      // to unwind, same reasoning as the main scan stop handler above: the
+      // fetch may be mid-await on a page load that won't re-check the signal
+      // until that load resolves on its own.
+      if (activeLogoFetch.tabId != null) chrome.tabs.remove(activeLogoFetch.tabId).catch(() => {});
+      activeLogoFetch = null;
+    }
+    sendResponse({ success: true });
     return true;
   }
 

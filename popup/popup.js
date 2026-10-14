@@ -1,4 +1,5 @@
 const scanBtn = document.getElementById('scanBtn');
+const stopScanBtn = document.getElementById('stopScanBtn');
 const copyBtn = document.getElementById('copyBtn');
 const resultsDiv = document.getElementById('results');
 const resultsCompanyBanner = document.getElementById('resultsCompanyBanner');

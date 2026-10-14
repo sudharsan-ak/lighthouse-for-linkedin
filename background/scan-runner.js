@@ -8,22 +8,62 @@ export async function runScraper(companySlug, deps) {
     scrapeTabWithHiringFrame,
     isRecruiter,
     SEARCH_QUERY,
+    resolveCompanyId,
+    searchByCompanyId,
+    signal,
+    onTabOpened,
   } = deps;
+
+  // Throws if the caller requested a stop. Called at every major await
+  // boundary (after each page load/search/keyword) so a stop takes effect
+  // promptly instead of only between whole scan phases.
+  function checkAbort() {
+    if (signal?.aborted) {
+      const err = new Error('Scan stopped by user');
+      err.name = 'ScanStoppedError';
+      throw err;
+    }
+  }
+
+  // A plain checkAbort() between awaits is not enough on its own: the tab is
+  // force-closed the instant Stop is clicked (background.js's 'stop' handler),
+  // but a pending await on waitForTabLoad/sleep for that now-closed tab does
+  // not reject immediately - it only settles whenever Chrome's extension API
+  // gets around to noticing the tab is gone, which can take several seconds
+  // and is what made the Stop button visibly linger on "Stopping...". This
+  // wraps a promise so the abort signal itself interrupts it immediately,
+  // regardless of what the wrapped promise is doing.
+  function raceWithAbort(promise) {
+    if (!signal) return promise;
+    if (signal.aborted) return Promise.reject(Object.assign(new Error('Scan stopped by user'), { name: 'ScanStoppedError' }));
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(Object.assign(new Error('Scan stopped by user'), { name: 'ScanStoppedError' }));
+      signal.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        v => { signal.removeEventListener('abort', onAbort); resolve(v); },
+        e => { signal.removeEventListener('abort', onAbort); reject(e); }
+      );
+    });
+  }
 
   const peopleBaseUrl = `https://www.linkedin.com/company/${companySlug}/people/?facetGeoRegion=103644278`;
 
   const tab = await createTab(peopleBaseUrl);
   const tabId = tab.id;
+  onTabOpened?.(tabId);
 
   try {
-    await waitForTabLoad(tabId);
-    await sleep(1500);
+    checkAbort();
+    await raceWithAbort(waitForTabLoad(tabId));
+    await raceWithAbort(sleep(1500));
+    checkAbort();
 
     let logoUrl = null;
     for (let attempt = 0; attempt < 3 && !logoUrl; attempt++) {
-      if (attempt > 0) await sleep(1000);
+      checkAbort();
+      if (attempt > 0) await raceWithAbort(sleep(1000));
       try {
-        const logoResult = await chrome.scripting.executeScript({
+        const logoResult = await raceWithAbort(chrome.scripting.executeScript({
           target: { tabId },
           func: () => {
             function getLicdnUrl(img) {
@@ -69,31 +109,66 @@ export async function runScraper(companySlug, deps) {
 
             return null;
           }
-        });
+        }));
         logoUrl = logoResult[0]?.result || null;
       } catch (_) {}
     }
 
+    checkAbort();
     chrome.storage.session.set({ status: 'Searching for recruiters...', progress: 1, total: 1 });
 
     const searchUrl = `${peopleBaseUrl}&keywords=${encodeURIComponent(SEARCH_QUERY)}`;
     await navigateTab(tabId, searchUrl);
-    await waitForTabLoad(tabId);
-    await sleep(1800);
+    await raceWithAbort(waitForTabLoad(tabId));
+    await raceWithAbort(sleep(1800));
+    checkAbort();
 
-    const results = await scrapeTab(tabId);
+    let results = await raceWithAbort(scrapeTab(tabId));
     let filtered = results.filter(r => isRecruiter(r.title));
 
-    if (filtered.length < 5) {
+    // Raw scrape returned nothing at all (not just zero recruiter-titled cards).
+    // This is the structural-breakage signal, not a thin-pool signal: it means
+    // the People-tab selectors likely stopped matching, since even a genuinely
+    // recruiter-free company page still returns some raw cards. A thin pool
+    // (results.length > 0 but filtered.length < 5) is unaffected by this branch
+    // and keeps using the existing keyword-retry path below as before.
+    if (results.length === 0 && resolveCompanyId && searchByCompanyId) {
+      checkAbort();
+      chrome.storage.session.set({ status: 'People tab returned nothing, trying company-ID search...' });
+      const companyId = await resolveCompanyId(companySlug, tabId, { navigateTab, waitForTabLoad, sleep, signal });
+      if (companyId) {
+        const seen = new Set();
+        const idResults = [];
+        for (const kw of ['recruiter', 'talent acquisition', 'technical sourcer']) {
+          checkAbort();
+          const kwResults = await searchByCompanyId(companyId, kw, tabId, { navigateTab, waitForTabLoad, sleep, signal });
+          for (const r of kwResults) {
+            if (isRecruiter(r.title) && !seen.has(r.url)) {
+              seen.add(r.url);
+              idResults.push(r);
+            }
+          }
+        }
+        console.log(`[companyId fallback] ${companySlug}: companyId ${companyId}, found ${idResults.length} recruiters`);
+        if (idResults.length > 0) {
+          results = idResults;
+          filtered = idResults;
+        }
+      }
+    }
+
+    if (filtered.length < 5 && results.length > 0) {
+      checkAbort();
       chrome.storage.session.set({ status: `Only ${filtered.length} found. Trying keyword search...` });
       const seen = new Set(filtered.map(r => r.url));
       const extraResults = [...filtered];
       for (const kw of ['recruiter', 'talent', 'hiring']) {
+        checkAbort();
         const kwUrl = `${peopleBaseUrl}&keywords=${encodeURIComponent(kw)}`;
         await navigateTab(tabId, kwUrl);
-        await waitForTabLoad(tabId);
-        await sleep(1800);
-        const kwResults = await scrapeTab(tabId);
+        await raceWithAbort(waitForTabLoad(tabId));
+        await raceWithAbort(sleep(1800));
+        const kwResults = await raceWithAbort(scrapeTab(tabId));
         for (const r of kwResults) {
           if (isRecruiter(r.title) && !seen.has(r.url)) {
             seen.add(r.url);
@@ -106,13 +181,15 @@ export async function runScraper(companySlug, deps) {
 
     let hiringFrameResults = [];
     if (filtered.length === 0) {
+      checkAbort();
       chrome.storage.session.set({ status: 'No recruiters found by title. Scanning for #Hiring badges...' });
 
       await navigateTab(tabId, peopleBaseUrl);
-      await waitForTabLoad(tabId);
-      await sleep(1800);
+      await raceWithAbort(waitForTabLoad(tabId));
+      await raceWithAbort(sleep(1800));
+      checkAbort();
 
-      const allPeople = await scrapeTabWithHiringFrame(tabId);
+      const allPeople = await raceWithAbort(scrapeTabWithHiringFrame(tabId));
       hiringFrameResults = allPeople.filter(r => r.hiringFrame);
 
       chrome.storage.session.set({

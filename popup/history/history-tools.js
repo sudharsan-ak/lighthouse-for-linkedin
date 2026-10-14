@@ -1,6 +1,13 @@
 window.window._bulkStopRequested = false;
 const historyStopBtn = document.getElementById('historyStopBtn');
-historyStopBtn?.addEventListener('click', () => { window.window._bulkStopRequested = true; });
+historyStopBtn?.addEventListener('click', () => {
+  window.window._bulkStopRequested = true;
+  // Aborts whatever background-tab fetch is currently in flight (e.g. a
+  // Refresh Logos pass) immediately, rather than only stopping once the
+  // current company's fetch happens to finish on its own. No-ops safely if
+  // no logo fetch is active (e.g. during a different bulk operation).
+  chrome.runtime.sendMessage({ action: 'stopLogoFetch' });
+});
 
 const modal        = document.getElementById('addRecruiterModal');
 const modalError   = document.getElementById('modalError');
