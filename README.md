@@ -1,4 +1,4 @@
-# LinkedIn Job Toolkit
+# Lighthouse for LinkedIn
 
 A Chrome extension (Manifest V3) that assists with job hunting on LinkedIn: finds recruiters at any company, captures job descriptions, and drafts application answers. Opens as a persistent side panel and works in the background even when the panel is closed.
 

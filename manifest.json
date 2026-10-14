@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn Job Toolkit",
+  "name": "Lighthouse for LinkedIn",
   "version": "3.0",
   "description": "Finds recruiters, captures job descriptions, and drafts application answers while you browse LinkedIn job postings.",
   "permissions": ["activeTab", "scripting", "tabs", "storage", "unlimitedStorage", "sidePanel", "contextMenus"],
@@ -19,7 +19,7 @@
         "default": "Alt+R",
         "mac":     "Command+Shift+R"
       },
-      "description": "Open LinkedIn Job Toolkit"
+      "description": "Open Lighthouse for LinkedIn"
     }
   },
 
