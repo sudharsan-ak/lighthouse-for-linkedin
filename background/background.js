@@ -33,51 +33,65 @@ const RECRUITER_TITLE_PATTERNS = [
   /\bacquisition\b/i,
 ];
 
-const EXCLUDE_TITLE_PATTERNS = [
-  /engineer/i,
-  /software/i,
-  /developer/i,
-  /designer/i,
-  /executive/i,
-  /analyst/i,
-  /marketing/i,
-  /sales/i,
-  /product/i,
-  /finance/i,
-  /legal/i,
-  /\bdata\b/i,
-  /devops/i,
-  /network/i,
-  /security/i,
-  /customer/i,
-  /account\s+exec/i,
-  /deployment/i,
-  /training/i,
-  /writer/i,
-  /payroll/i,
+// Plain words, not regexes: the per-word adjacency check below needs to
+// compare individual title words against this list directly.
+const EXCLUDE_WORDS = [
+  'engineer', 'engineering', 'software', 'developer', 'designer', 'executive',
+  'analyst', 'marketing', 'sales', 'product', 'finance', 'legal', 'data',
+  'devops', 'network', 'security', 'customer', 'deployment', 'training',
+  'writer', 'payroll',
 ];
+
+// A connector word sitting between an excluded word and a recruiting word
+// proves the excluded word is part of an unrelated phrase (e.g. "Engineer
+// BUILDING Talent Acquisition tools"), not a compound role modifier (e.g.
+// "Software Engineering Recruiter", "Technical Recruiter"). Without this
+// check, a title merely mentioning a tech domain in passing near the word
+// "talent" or "recruiting" would be wrongly accepted.
+const CONNECTOR_WORDS = ['for', 'building', 'team', 'focused', 'on', 'with', 'of', 'the', 'a', 'an', 'to', 'and'];
+
+// Clause-separator split: a title like "Technical Recruiter | Talent
+// Acquisition Partner | SaaS & Technical Recruiting" describes multiple
+// facets of one role across pipe/comma/dash-separated clauses, and only one
+// of them needs to be a genuine recruiting role for the whole title to
+// count. Splitting first is what lets "Software Engineer, formerly
+// Technical Recruiter" correctly pass (the second clause is a real
+// recruiting role) while "Software Engineer" alone correctly fails (no
+// clause mentions recruiting at all).
+function splitClauses(title) {
+  return title.split(/\s*[,|]\s*|\s+at\s+|\s+@\s+|\s+-\s+|\s*\/\s*/i).map(s => s.trim()).filter(Boolean);
+}
+
+// A clause counts as a genuine recruiting role if it has a recruiting word,
+// AND every excluded word within it is either adjacent to (within 3 words
+// of, as a compound modifier) the recruiting word with no connector word
+// breaking that compound, or isn't present at all. An excluded word more
+// than 3 words away, or separated by a connector word, means it's
+// describing something else in the same clause (the team, the tooling, the
+// department), not the person's own role.
+function isRecruitingClause(clause) {
+  const words = clause.trim().split(/\s+/);
+  const lowerWords = words.map(w => w.toLowerCase().replace(/[^a-z]/g, ''));
+
+  let recruitIdx = -1;
+  for (let i = 0; i < words.length; i++) {
+    if (RECRUITER_TITLE_PATTERNS.some(p => p.test(words[i]))) { recruitIdx = i; break; }
+  }
+  if (recruitIdx === -1) return false;
+
+  for (let i = 0; i < lowerWords.length; i++) {
+    if (!EXCLUDE_WORDS.includes(lowerWords[i])) continue;
+    const [lo, hi] = i < recruitIdx ? [i, recruitIdx] : [recruitIdx, i];
+    const between = lowerWords.slice(lo + 1, hi);
+    if (between.some(w => CONNECTOR_WORDS.includes(w))) return false;
+    if (hi - lo > 3) return false;
+  }
+  return true;
+}
 
 function isRecruiter(title) {
   if (!title || title.trim() === '') return false;
-
-  // Find the earliest recruiting-word match, not just whether one exists -
-  // its position is what tells an excluded word apart from a domain the
-  // recruiter works in (e.g. "Technical Recruiter, Software Engineering")
-  // versus an excluded word that IS the person's own role (e.g. "Software
-  // Engineer, ex-Recruiting Intern"). Only an excluded match appearing
-  // BEFORE the first recruiting word disqualifies the title.
-  let firstRecruitIdx = Infinity;
-  for (const p of RECRUITER_TITLE_PATTERNS) {
-    const m = title.match(p);
-    if (m && m.index < firstRecruitIdx) firstRecruitIdx = m.index;
-  }
-  if (firstRecruitIdx === Infinity) return false;
-
-  for (const p of EXCLUDE_TITLE_PATTERNS) {
-    const m = title.match(p);
-    if (m && m.index < firstRecruitIdx) return false;
-  }
-  return true;
+  return splitClauses(title).some(isRecruitingClause);
 }
 
 // -- Cache helpers -------------------------------------------------------------
