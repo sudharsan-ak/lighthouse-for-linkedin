@@ -59,10 +59,25 @@ const EXCLUDE_TITLE_PATTERNS = [
 
 function isRecruiter(title) {
   if (!title || title.trim() === '') return false;
-  const allowed = RECRUITER_TITLE_PATTERNS.some(p => p.test(title));
-  if (!allowed) return false;
-  const excluded = EXCLUDE_TITLE_PATTERNS.some(p => p.test(title));
-  return !excluded;
+
+  // Find the earliest recruiting-word match, not just whether one exists -
+  // its position is what tells an excluded word apart from a domain the
+  // recruiter works in (e.g. "Technical Recruiter, Software Engineering")
+  // versus an excluded word that IS the person's own role (e.g. "Software
+  // Engineer, ex-Recruiting Intern"). Only an excluded match appearing
+  // BEFORE the first recruiting word disqualifies the title.
+  let firstRecruitIdx = Infinity;
+  for (const p of RECRUITER_TITLE_PATTERNS) {
+    const m = title.match(p);
+    if (m && m.index < firstRecruitIdx) firstRecruitIdx = m.index;
+  }
+  if (firstRecruitIdx === Infinity) return false;
+
+  for (const p of EXCLUDE_TITLE_PATTERNS) {
+    const m = title.match(p);
+    if (m && m.index < firstRecruitIdx) return false;
+  }
+  return true;
 }
 
 // -- Cache helpers -------------------------------------------------------------
